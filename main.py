@@ -5,10 +5,12 @@ from enum import Enum
 import subprocess
 import pyautogui
 import psutil
+import shutil
 import time
 import os
 import dbus
 
+STEAM_EXE = shutil.which("steam")
 FF3_3DR_APP_ID = "239120"
 
 class ScreenSaver(object):
@@ -108,13 +110,13 @@ def steam_is_running():
 def demarrer_steam():
     env = os.environ
     env["STEAM_FORCE_DESKTOPUI_SCALING"] = "1.25"
-    subprocess.Popen("/usr/games/steam", env = env)
+    subprocess.Popen(STEAM_EXE, env = env)
 
 def ff3_3dr_launcher_is_running():
     return detection_application("FF3_Launcher.ex")
 
 def demarrer_ff3_3dr_launcher():
-    subprocess.Popen(["/usr/games/steam", f"steam://rungameid/{FF3_3DR_APP_ID}"])
+    subprocess.Popen([STEAM_EXE, f"steam://rungameid/{FF3_3DR_APP_ID}"])
 
 def ff3_3dr_is_running():
     return detection_application("FF3_Win32")
