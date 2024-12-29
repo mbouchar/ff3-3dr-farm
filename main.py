@@ -33,6 +33,39 @@ class Direction(Enum):
     gauche_droite = 0
     haut_bas = 1
 
+from tempfile import NamedTemporaryFile
+from PIL import Image
+import pyscreenshot as ImageGrab
+def screenshotFix(imageFilename=None, region=None):
+    if imageFilename is None:
+        tmpFile = NamedTemporaryFile(suffix = ".png", delete_on_close = False)
+        tmpFile.close()
+        tmpFilename = tmpFile.name
+    else:
+        tmpFilename = imageFilename
+
+    if region is not None:
+        im = ImageGrab.grab(bbox=(region[0], region[1], region[2] + region[0], region[3] + region[1]))
+    else:
+        im = ImageGrab.grab()
+    im.save(tmpFilename)
+
+    im = Image.open(tmpFilename)
+
+    if region is not None:
+        assert len(region) == 4, 'region argument must be a tuple of four ints'
+        assert isinstance(region[0], int) and isinstance(region[1], int) and isinstance(region[2], int) and isinstance(region[3], int), 'region argument must be a tuple of four ints'
+        im = im.crop((region[0], region[1], region[2] + region[0], region[3] + region[1]))
+        os.unlink(tmpFilename)  # delete image of entire screen to save cropped version
+        im.save(tmpFilename)
+    else:
+        # force loading before unlinking, Image.open() is lazy
+        im.load()
+
+    if imageFilename is None:
+        os.unlink(tmpFilename)
+    return im
+
 def pressFix(keys, interval = 0.1):
     if not isinstance(keys, list):
         keys = [keys]
@@ -46,7 +79,8 @@ def attendre_image(nom_image, boucler = True, temps_attente = 1.0, keys = None, 
         try:
             if debug:
                 print(f"Détection de l'image {nom_image}")
-            res = pyautogui.locateOnScreen(nom_image, **kwargs)
+            sc = screenshotFix()
+            res = pyautogui.locate(nom_image, sc, **kwargs)
             return res
         except ImageNotFoundException:
             if debug:
@@ -248,7 +282,7 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         pass
     finally:
+        screenSaver.enable()
+
         end = datetime.now()
         print(end - start)
-
-        screenSaver.enable()
