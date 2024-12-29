@@ -7,11 +7,18 @@ import pyautogui
 import psutil
 import shutil
 import time
+import sys
 import os
 import dbus
 
+SUPPORTED_SESSIONS = ["KDE"]
 STEAM_EXE = shutil.which("steam")
 FF3_3DR_APP_ID = "239120"
+RATIO = None
+
+###
+# Utilitaires
+##############
 
 class ScreenSaver(object):
     def __init__(self):
@@ -34,6 +41,72 @@ class ScreenSaver(object):
 class Direction(Enum):
     gauche_droite = 0
     haut_bas = 1
+
+def get_scaling_ratio(debug = True):
+    session = None
+    if sys.platform == "linux":
+        session = os.environ["XDG_SESSION_DESKTOP"]
+
+    RATIO = None
+    match session:
+        case "KDE":
+            from PyQt5.QtGui import QGuiApplication
+            app = QGuiApplication(sys.argv)
+            screen = app.primaryScreen()
+            RATIO = screen.devicePixelRatio()
+        case _:
+            raise NotImplementedError(f"La session '{session}' n'est pas supportée")
+
+    if debug:
+        print(f"Le ratio de l'écran est: {RATIO}")
+
+    return RATIO
+
+def get_scaled_filename(nom_image):
+    if RATIO is not None:
+        nom_image, ext = os.path.splitext(nom_image)
+        nom_image = f"{nom_image}-{RATIO}{ext}"
+
+    return nom_image
+
+def detection_application(nom_application):
+    for p in psutil.process_iter():
+        if p.name() == nom_application:
+            return True
+
+    return False
+
+def steam_is_running():
+    return detection_application("steam")
+
+def demarrer_steam(ratio = 1.0):
+    env = os.environ
+    env["STEAM_FORCE_DESKTOPUI_SCALING"] = str(ratio)
+    subprocess.Popen(STEAM_EXE, env = env)
+
+def attendre_image(nom_image, boucler = True, temps_attente = 1.0, keys = None, debug = True, **kwargs):
+    nom_image = get_scaled_filename(nom_image)
+    while True:
+        try:
+            if debug:
+                print(f"Détection de l'image {nom_image}")
+            sc = screenshotFix()
+            res = pyautogui.locate(nom_image, sc, **kwargs)
+            return res
+        except ImageNotFoundException:
+            if debug:
+                print(f"L'image {nom_image} n'a pas été trouvé")
+            if keys is not None:
+                pressFix(keys)
+            if boucler:
+                print("On attend et on réesaye la détection")
+                time.sleep(temps_attente)
+            else:
+                return None
+
+###
+# Correctifs de problèmes de la librairie pyautogui
+####################################################
 
 from tempfile import NamedTemporaryFile
 from PIL import Image
@@ -76,41 +149,9 @@ def pressFix(keys, interval = 0.1):
         with pyautogui.hold(key):
             time.sleep(interval)
 
-def attendre_image(nom_image, boucler = True, temps_attente = 1.0, keys = None, debug = True, **kwargs):
-    while True:
-        try:
-            if debug:
-                print(f"Détection de l'image {nom_image}")
-            sc = screenshotFix()
-            res = pyautogui.locate(nom_image, sc, **kwargs)
-            return res
-        except ImageNotFoundException:
-            if debug:
-                print(f"L'image {nom_image} n'a pas été trouvé")
-            if keys is not None:
-                pressFix(keys)
-            if boucler:
-                print("On attend et on réesaye la détection")
-                time.sleep(temps_attente)
-            else:
-                return None
-
 ###
-
-def detection_application(nom_application):
-    for p in psutil.process_iter():
-        if p.name() == nom_application:
-            return True
-
-    return False
-
-def steam_is_running():
-    return detection_application("steam")
-
-def demarrer_steam():
-    env = os.environ
-    env["STEAM_FORCE_DESKTOPUI_SCALING"] = "1.25"
-    subprocess.Popen(STEAM_EXE, env = env)
+# Logique FF3 3DR
+##################
 
 def ff3_3dr_launcher_is_running():
     return detection_application("FF3_Launcher.ex")
@@ -251,34 +292,45 @@ def main_loop(script = lvl_up, direction = Direction.gauche_droite, delai_deplac
         except pyautogui.FailSafeException:
             pass
 
+def detection_initiale(debug = True):
+    if not ff3_3dr_is_running():
+        if not ff3_3dr_launcher_is_running():
+            if not steam_is_running():
+                print("Steam n'est pas en cours d'exécution, on le démarre")
+                demarrer_steam()
+            else:
+                print("Steam est déjà démarré")
+
+            print("Démarrage de FF3 3D Remake")
+            demarrer_ff3_3dr_launcher()
+
+        detection_launcher(demarrer_jeu = True)
+    else:
+        print("Le jeu FF3 3D Remake est déjà démarré")
+
+    while not detection_in_game(attendre = False):
+        if detection_menu_principal(attendre = False):
+            demarrer_partie()
+        print("Ni dans le jeu, ni dans le menu, on recommence")
+
+    if debug:
+        print("Configuration initiale terminé!!!")
+
 if __name__ == "__main__":
+    from datetime import datetime
+    start = datetime.now()
+
+    # Détection du ratio (scaling) de l'écran
+    RATIO = get_scaling_ratio()
+
     screenSaver = ScreenSaver()
     try:
-        from datetime import datetime
-        start = datetime.now()
-
         screenSaver.disable()
 
-        if not ff3_3dr_is_running():
-            if not ff3_3dr_launcher_is_running():
-                if not steam_is_running():
-                    print("Steam n'est pas en cours d'exécution, on le démarre")
-                    demarrer_steam()
-                else:
-                    print("Steam est déjà démarré")
+        # Se rendre jusque dans le jeu
+        detection_initiale()
 
-                print("Démarrage de FF3 3D Remake")
-                demarrer_ff3_3dr_launcher()
-
-            detection_launcher(demarrer_jeu = True)
-        else:
-            print("Le jeu FF3 3D Remake est déjà démarré")
-
-        while not detection_in_game(attendre = False):
-            if detection_menu_principal(attendre = False):
-                demarrer_partie()
-
-        print("Configuration initiale terminé!!!")
+        # Logique automatisée
         #main_loop(script = lvl_up)
         main_loop(script = lvl_jobs, delai_deplacement = 0)
     except KeyboardInterrupt:
