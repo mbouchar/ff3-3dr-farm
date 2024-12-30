@@ -10,11 +10,14 @@ import time
 import sys
 import os
 import dbus
+import logging
 
 SUPPORTED_SESSIONS = ["KDE"]
 STEAM_EXE = shutil.which("steam")
 FF3_3DR_APP_ID = "239120"
-RATIO = None
+
+ratio = None
+logger = logging.getLogger(__name__)
 
 ###
 # Utilitaires
@@ -29,12 +32,10 @@ class ScreenSaver(object):
 
     def disable(self):
         if self.__cookie_ is None:
-            print("Désactivation du screensaver")
             self.__cookie_ = self.__saver_interface_.Inhibit("ff33dr_automater", "Farming")
 
     def enable(self):
         if self.__cookie_ is not None:
-            print("Réactivation du screensaver")
             self.__saver_interface_.UnInhibit(self.__cookie_)
             self.__cookie_ = None
 
@@ -42,30 +43,27 @@ class Direction(Enum):
     gauche_droite = 0
     haut_bas = 1
 
-def get_scaling_ratio(debug = True):
+def get_scaling_ratio():
     session = None
     if sys.platform == "linux":
         session = os.environ["XDG_SESSION_DESKTOP"]
 
-    RATIO = None
+    ratio = None
     match session:
         case "KDE":
             from PyQt5.QtGui import QGuiApplication
             app = QGuiApplication(sys.argv)
             screen = app.primaryScreen()
-            RATIO = screen.devicePixelRatio()
+            ratio = screen.devicePixelRatio()
         case _:
             raise NotImplementedError(f"La session '{session}' n'est pas supportée")
 
-    if debug:
-        print(f"Le ratio de l'écran est: {RATIO}")
-
-    return RATIO
+    return ratio
 
 def get_scaled_filename(nom_image):
-    if RATIO is not None:
+    if ratio is not None:
         nom_image, ext = os.path.splitext(nom_image)
-        nom_image = f"{nom_image}-{RATIO}{ext}"
+        nom_image = f"{nom_image}-{ratio}{ext}"
 
     return nom_image
 
@@ -84,22 +82,20 @@ def demarrer_steam(ratio = 1.0):
     env["STEAM_FORCE_DESKTOPUI_SCALING"] = str(ratio)
     subprocess.Popen(STEAM_EXE, env = env)
 
-def attendre_image(nom_image, boucler = True, temps_attente = 1.0, keys = None, debug = True, **kwargs):
+def attendre_image(nom_image, boucler = True, temps_attente = 1.0, keys = None, **kwargs):
     nom_image = get_scaled_filename(nom_image)
     while True:
         try:
-            if debug:
-                print(f"Détection de l'image {nom_image}")
+            logger.info(f"Détection de l'image {nom_image}")
             sc = screenshotFix()
             res = pyautogui.locate(nom_image, sc, **kwargs)
             return res
         except ImageNotFoundException:
-            if debug:
-                print(f"L'image {nom_image} n'a pas été trouvé")
+            logger.info(f"L'image {nom_image} n'a pas été trouvé")
             if keys is not None:
                 pressFix(keys)
             if boucler:
-                print("On attend et on réesaye la détection")
+                logger.info("On attend et on réesaye la détection")
                 time.sleep(temps_attente)
             else:
                 return None
@@ -111,13 +107,14 @@ def attendre_image(nom_image, boucler = True, temps_attente = 1.0, keys = None, 
 from tempfile import NamedTemporaryFile
 from PIL import Image
 import pyscreenshot as ImageGrab
-def screenshotFix(imageFilename=None, region=None):
+def screenshotFix(imageFilename = None, region = None, prefix = "ff3-3dr-", delete = True):
     if imageFilename is None:
-        tmpFile = NamedTemporaryFile(suffix = ".png", delete_on_close = False)
+        tmpFile = NamedTemporaryFile(prefix = prefix, suffix = ".png", delete_on_close = False, delete = delete)
         tmpFile.close()
         tmpFilename = tmpFile.name
     else:
         tmpFilename = imageFilename
+    logger.debug(f"Fichier temporaire: {tmpFilename}")
 
     if region is not None:
         im = ImageGrab.grab(bbox=(region[0], region[1], region[2] + region[0], region[3] + region[1]))
@@ -137,8 +134,6 @@ def screenshotFix(imageFilename=None, region=None):
         # force loading before unlinking, Image.open() is lazy
         im.load()
 
-    if imageFilename is None:
-        os.unlink(tmpFilename)
     return im
 
 def pressFix(keys, interval = 0.1):
@@ -167,7 +162,7 @@ def ff3_3dr_is_running():
 def detection_launcher(demarrer_jeu = False):
     res = attendre_image("screenshots/ff3/launcher/jouer.png")
     if demarrer_jeu:
-        print("Démarrage du jeu Final Fantasy III (3D Remake)")
+        logger.info("Cliquer sur le bouton 'JOUER' pour démarrer le jeu Final Fantasy III (3D Remake)")
         pyautogui.click(pyautogui.center(res))
 
 def detection_menu_principal(attendre = True):
@@ -175,7 +170,7 @@ def detection_menu_principal(attendre = True):
     return res is not None
 
 def demarrer_partie():
-    print("Démarrage de la partie")
+    logger.info("Démarrage de la partie (enter + enter)")
     pressFix(["enter", "enter"])
 
 def detection_in_game(attendre = True, keys = None, temps_attente = 0.5):
@@ -190,26 +185,24 @@ def valider_attaque_automatique(activer = True):
     res = attendre_image("screenshots/ff3/combat-auto.png", boucler = False, grayscale = True, confidence = 0.9)
     if res is None:
         if activer:
-            print("Activation du combat automatique")
+            logger.info("Activation du combat automatique")
             pressFix("a")
         else:
-            print("Le combat automatique n'est pas activé")
+            logger.info("Le combat automatique n'est pas activé")
             return False
     else:
-        print("Le combat automatique est déjà activé")
+        logger.info("Le combat automatique est déjà activé")
 
     return True
 
 def bloquer():
     pressFix(["down", "down", "enter"], interval = 0.2)
-    time.sleep(0.4)
 
-def attaquer():
+def attaquer(attente = 0.4):
     pressFix(["enter", "enter"], interval = 0.2)
-    time.sleep(0.4)
 
 def attendre_prochain_tour(attendre = True):
-    while attendre_image("screenshots/ff3/debut-tour.png", boucler = False) is None:
+    while attendre_image("screenshots/ff3/debut-tour.png", boucler = False, confidence = 0.9) is None:
         if attendre:
             time.sleep(0.2)
         else:
@@ -228,39 +221,57 @@ def lvl_up():
     valider_attaque_automatique()
     attendre_fin_combat()
 
+# Pour monter de niveau une job, il faut effectuer des "actions". Le script
+# prend pour acquis que le grinding s'effectue dans un endroit où les ennemis
+# sont de bas niveau (ex: début du jeu). Pour monter de niveau, il faut effectuer
+# un nombre total d'actions qui dépend de la job attitrée à un personnage (6-8).
+#
+# Le script va activer l'action de bloquer pour chaque personnage pendant 6 tours
+# par combat, ce qui devrait normalement augmenter le niveau de job de chaque personnage
+# de 1 par combat. Il n'est pas possible de monter deux fois de niveau pour un même
+# combat.
 def lvl_jobs(combat_rapide = True, nombre_garde = 6):    
-    # Désactiver l'attaque automatique
+    # Désactiver l'attaque automatique, si elle était déjà activée
+    # @todo: La détection s'effectue probablement avant que le combat soit vraiment démarré
     if valider_attaque_automatique(activer = False):
-        print("Désactivation de l'attaque automatique")
+        logger.info("Désactivation de l'attaque automatique")
         pressFix("a")
 
+    # Pour le combat rapide, on commence par bloquer et ensuite, on active
+    # le mode automatique pendant une certaine période de temps
     if combat_rapide:
-        print("Blocage initial")
+        logger.info("Blocage initial")
         for j in range(4):
-            print(f"Bloquer avec le personnage {j}")
+            logger.info(f"Attente du début de l'action du personnage {j}")
+            attendre_prochain_tour()
+            logger.info(f"Le tour du personnage {j} est démarré")
+            logger.info(f"Bloquer avec le personnage {j}")
             bloquer()
-        print(f"Démarrage de l'attaque automatique pour {nombre_garde} tours")
+        logger.info(f"Démarrage de l'attaque automatique pour {nombre_garde} tours")
         # Activer l'attaque automatique
-        valider_attaque_automatique()
+        valider_attaque_automatique(activer = True)
         # Ça prend environs 5 secondes par tour
         time.sleep(5 * nombre_garde)
-        print("Désactivation de l'attaque automatique")
+        logger.info("Désactivation de l'attaque automatique")
         pressFix("a")
+    # Pour le mode lent, on bloque un certain nombre de tours, sans activer le combat automatique.
+    # Ce mode est 3-4 fois plus lent que le combat rapide pour le même nombre d'actions.
     else:
         # Bloquer 6 fois pour monter de niveau
         for i in range(nombre_garde):
-            print(f"Tour de combat #{i}")
-            print("Attente du prochain tour de combat")
-            attendre_prochain_tour()
-            print("Le prochain tour de combat est démarré")
+            logger.info(f"Tour de combat #{i}")
             for j in range(4):
-                print(f"Bloquer avec le personnage {j}")
+                logger.info(f"Attente du début de l'action du personnage {j}")
+                attendre_prochain_tour()
+                logger.info(f"Le tour du personnage {j} est démarré")
+                logger.info(f"Bloquer avec le personnage {j}")
                 bloquer()
 
     attendre_prochain_tour()
     for i in range(4):
-        print(f"Attaque avec le personnage {i}")
+        logger.info(f"Attaque avec le personnage {i}")
         attaquer()
+        time.sleep(0.4)
     
     attendre_fin_combat()
 
@@ -275,7 +286,7 @@ def main_loop(script = lvl_up, direction = Direction.gauche_droite, delai_deplac
     while True:
         try:
             while True:
-                print("Se déplacer pour démarrer un combat")
+                logger.info("Se déplacer pour démarrer un combat")
                 with pyautogui.hold(direction1):
                     if est_en_combat(attendre = False):
                         break
@@ -285,58 +296,64 @@ def main_loop(script = lvl_up, direction = Direction.gauche_droite, delai_deplac
                         break
                     time.sleep(delai_deplacement)
             
-            print("Combat démarré")
+            logger.info("---------------------- Combat démarré ----------------------")
             script()
-            print("Combat terminé!")
+            logger.info("---------------------- Combat terminé ----------------------")
             detection_in_game(keys = ["enter", "enter", "enter"], temps_attente = 0.2)
         except pyautogui.FailSafeException:
             pass
 
-def detection_initiale(debug = True):
+def detection_initiale():
     if not ff3_3dr_is_running():
         if not ff3_3dr_launcher_is_running():
             if not steam_is_running():
-                print("Steam n'est pas en cours d'exécution, on le démarre")
+                logger.info("Steam n'est pas en cours d'exécution, on le démarre")
                 demarrer_steam()
             else:
-                print("Steam est déjà démarré")
+                logger.info("Steam est déjà démarré")
 
-            print("Démarrage de FF3 3D Remake")
+            logger.info("Démarrage de FF3 3D Remake")
             demarrer_ff3_3dr_launcher()
 
         detection_launcher(demarrer_jeu = True)
     else:
-        print("Le jeu FF3 3D Remake est déjà démarré")
+        logger.info("Le jeu FF3 3D Remake est déjà démarré")
 
     while not detection_in_game(attendre = False):
         if detection_menu_principal(attendre = False):
             demarrer_partie()
-        print("Ni dans le jeu, ni dans le menu, on recommence")
+        logger.info("Ni dans le jeu, ni dans le menu, on recommence")
 
-    if debug:
-        print("Configuration initiale terminé!!!")
+    logger.info("Configuration initiale terminé!!!")
 
 if __name__ == "__main__":
     from datetime import datetime
     start = datetime.now()
 
+    logging.basicConfig(format = "%(asctime)s - %(message)s", level = logging.INFO)
+
     # Détection du ratio (scaling) de l'écran
-    RATIO = get_scaling_ratio()
+    ratio = get_scaling_ratio()
+    logger.info(f"Le ratio de l'écran est: {ratio}")
 
     screenSaver = ScreenSaver()
     try:
+        logger.info("Désactivation du screensaver")
         screenSaver.disable()
 
         # Se rendre jusque dans le jeu
+        logger.info("====================== DETECTION INITIALE ======================")
         detection_initiale()
 
         # Logique automatisée
         #main_loop(script = lvl_up)
+        logger.info("====================== MAIN LOOP ======================")
         main_loop(script = lvl_jobs, delai_deplacement = 0)
     except KeyboardInterrupt:
         pass
     finally:
+        logger.info("Réactivation du screensaver")
         screenSaver.enable()
 
         end = datetime.now()
-        print(end - start)
+        logger.info(end - start)
