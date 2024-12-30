@@ -195,11 +195,31 @@ def valider_attaque_automatique(activer = True):
 
     return True
 
-def bloquer():
-    pressFix(["down", "down", "enter"], interval = 0.2)
+class Action(Enum):
+    bloquer = 0
+    voler = 1
 
-def attaquer(attente = 0.4):
-    pressFix(["enter", "enter"], interval = 0.2)
+def executer_actions(action, interval = 0.2):
+    for j in range(4):
+        logger.info(f"Attente du début de l'action du personnage {j}")
+        attendre_prochain_tour()
+        logger.info(f"Le tour du personnage {j} est démarré")
+        match action:
+            case "voler":
+                logger.info(f"Voler avec le personnage {j}")
+                voler(interval)
+            case _:
+                logger.info(f"Bloquer avec le personnage {j}")
+                bloquer(interval)
+
+def bloquer(interval = 0.2):
+    pressFix(["down", "down", "enter"], interval = interval)
+
+def voler(interval = 0.2):
+    pressFix(["down", "enter"], interval = interval)
+
+def attaquer(interval = 0.2):
+    pressFix(["enter", "enter"], interval = interval)
 
 def attendre_prochain_tour(attendre = True):
     while attendre_image("screenshots/ff3/debut-tour.png", boucler = False, confidence = 0.9) is None:
@@ -230,7 +250,7 @@ def lvl_up():
 # par combat, ce qui devrait normalement augmenter le niveau de job de chaque personnage
 # de 1 par combat. Il n'est pas possible de monter deux fois de niveau pour un même
 # combat.
-def lvl_jobs(combat_rapide = True, nombre_garde = 6):    
+def lvl_jobs(combat_rapide = True, nombre_garde = 6, action = Action.bloquer):
     # Désactiver l'attaque automatique, si elle était déjà activée
     # @todo: La détection s'effectue probablement avant que le combat soit vraiment démarré
     if valider_attaque_automatique(activer = False):
@@ -240,13 +260,8 @@ def lvl_jobs(combat_rapide = True, nombre_garde = 6):
     # Pour le combat rapide, on commence par bloquer et ensuite, on active
     # le mode automatique pendant une certaine période de temps
     if combat_rapide:
-        logger.info("Blocage initial")
-        for j in range(4):
-            logger.info(f"Attente du début de l'action du personnage {j}")
-            attendre_prochain_tour()
-            logger.info(f"Le tour du personnage {j} est démarré")
-            logger.info(f"Bloquer avec le personnage {j}")
-            bloquer()
+        logger.info("Action initiale")
+        executer_actions(action)
         logger.info(f"Démarrage de l'attaque automatique pour {nombre_garde} tours")
         # Activer l'attaque automatique
         valider_attaque_automatique(activer = True)
@@ -260,12 +275,7 @@ def lvl_jobs(combat_rapide = True, nombre_garde = 6):
         # Bloquer 6 fois pour monter de niveau
         for i in range(nombre_garde):
             logger.info(f"Tour de combat #{i}")
-            for j in range(4):
-                logger.info(f"Attente du début de l'action du personnage {j}")
-                attendre_prochain_tour()
-                logger.info(f"Le tour du personnage {j} est démarré")
-                logger.info(f"Bloquer avec le personnage {j}")
-                bloquer()
+            executer_actions(action)
 
     attendre_prochain_tour()
     for i in range(4):
@@ -346,9 +356,15 @@ if __name__ == "__main__":
         detection_initiale()
 
         # Logique automatisée
-        #main_loop(script = lvl_up)
         logger.info("====================== MAIN LOOP ======================")
+        # Script général pour monter de niveau
+        #main_loop(script = lvl_up)
+
+        # Script optimisé pour monter le niveau des jobs
         main_loop(script = lvl_jobs, delai_deplacement = 0)
+
+        # Script optimisé pour monter le niveau des jobs (version voleur, qui ne peut pas bloquer)
+        #main_loop(script = lvl_job, delai_deplacement = 0, action = Action.voler)
     except KeyboardInterrupt:
         pass
     finally:
