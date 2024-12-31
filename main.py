@@ -29,11 +29,6 @@ class Job(StrEnum):
     Erudit = "erudit"
     Autre = "autre"
 
-class Action(Enum):
-    bloquer = 0
-    voler = 1
-    etude = 2
-
 ###
 # Utilitaires
 ##############
@@ -192,6 +187,86 @@ def est_en_combat(attendre = True):
     res = attendre_image("screenshots/ff3/en-combat.png", boucler = attendre)
     return res is not None
 
+class ActionBatailleBase(object):
+    def __init__(self, intervalle = 0.2):
+        self.__intervalle_ = intervalle
+
+    @property
+    def intervalle(self):
+        return self.__intervalle_
+
+    @property
+    def combat_rapide(self):
+        return True
+
+    def executer_action_pre(self):
+        pass
+
+    def executer_actions(self):
+        for j in range(4):
+            logger.info(f"Attente du début de l'action du personnage {j}")
+            self.attendre_prochain_tour()
+            logger.info(f"Le tour du personnage {j} est démarré")
+            self.executer_action_pre()
+
+    def executer_action_post(self):
+        pass
+
+    def executer_actions_post(self):
+        if not self.combat_rapide:
+            for j in range(4):
+                logger.info(f"Action POST pour le personnage {j}")
+                self.executer_action_post()
+
+    def attendre_prochain_tour(self, attendre = True):
+        while attendre_image("screenshots/ff3/debut-tour.png", boucler = False, confidence = 0.9) is None:
+            if attendre:
+                time.sleep(0.2)
+            else:
+                return False
+        return True
+
+    def attaquer(self):
+        # Sélectionner l'action
+        pressFix(["enter"], interval = self.intervalle)
+        # Sélectionner la cible
+        pressFix(["enter"], interval = self.intervalle)
+
+class ActionBatailleDefense(ActionBatailleBase):
+    def executer_action_pre(self):
+        logger.info("Action = bloquer")
+        pressFix(["down", "down", "enter"], interval = self.intervalle)
+
+class ActionBatailleVoler(ActionBatailleBase):
+    def executer_action_pre(self):
+        logger.info("Action = voler")
+        # Sélectionner l'action
+        pressFix(["down", "enter"], interval = self.intervalle)
+        # Sélectionner la cible
+        pressFix(["enter"])
+
+class ActionBatailleEtudier(ActionBatailleBase):
+    @property
+    def combat_rapide(self):
+        """Override du combat rapide pour les cas où l'action à effectuer ne peut pas être
+        automatisée de manière rapide."""
+        return False
+
+    def executer_action_pre(self):
+        logger.info(f"Action = étude")
+        # Sélectionner l'action
+        pressFix(["down", "down", "enter"], interval = self.intervalle)
+        # Sélectionner la cible
+        pressFix(["enter"], interval = self.intervalle)
+
+    def executer_action_post(self):
+        # Attendre que l'action Étude soit lancée
+        attendre_image("screenshots/ff3/combat/erudit-action-post.png", confidence = 0.9)
+        # Passer les informations
+        pressFix(["enter", "enter", "enter"], interval = self.intervalle)
+        # Attendre que le texte soit disparu avant la prochaine action
+        time.sleep(self.intervalle)
+
 def valider_attaque_automatique(activer = True):
     res = attendre_image("screenshots/ff3/combat-auto.png", boucler = False, grayscale = True, confidence = 0.9)
     if res is None:
@@ -204,54 +279,6 @@ def valider_attaque_automatique(activer = True):
     else:
         logger.info("Le combat automatique est déjà activé")
 
-    return True
-
-def executer_actions(action, interval = 0.2):
-    for j in range(4):
-        logger.info(f"Attente du début de l'action du personnage {j}")
-        attendre_prochain_tour()
-        logger.info(f"Le tour du personnage {j} est démarré")
-        match action:
-            case Action.voler:
-                logger.info(f"Voler avec le personnage {j}")
-                voler(interval)
-            case Action.etude:
-                logger.info(f"Étude avec le personnage {j}")
-                etude(interval)
-            case _:
-                logger.info(f"Bloquer avec le personnage {j}")
-                bloquer(interval)
-
-def bloquer(interval = 0.2):
-    pressFix(["down", "down", "enter"], interval = interval)
-
-def voler(interval = 0.2):
-    # Sélectionner l'action
-    pressFix(["down", "enter"], interval = interval)
-    # Sélectionner la cible
-    pressFix(["enter"])
-
-def etude(interval = 0.2):
-    # Sélectionner l'action
-    pressFix(["down", "down", "enter"], interval = interval)
-    # Sélectionner la cible
-    pressFix(["enter"], interval = interval)
-    # Passer les informations
-    # @todo: ne fonctionne pas, ça devrait être dans une post action, parce que toutes les commandes sont enregistrées et ensuite exécutées en batch plus tard
-    pressFix(["enter", "enter", "enter"], interval = interval)
-
-def attaquer(interval = 0.2):
-    # Sélectionner l'action
-    pressFix(["enter"], interval = interval)
-    # Sélectionner la cible
-    pressFix(["enter"], interval = interval)
-
-def attendre_prochain_tour(attendre = True):
-    while attendre_image("screenshots/ff3/debut-tour.png", boucler = False, confidence = 0.9) is None:
-        if attendre:
-            time.sleep(0.2)
-        else:
-            return False
     return True
 
 def attendre_fin_combat(attendre = True):
@@ -275,47 +302,43 @@ def lvl_up():
 # par combat, ce qui devrait normalement augmenter le niveau de job de chaque personnage
 # de 1 par combat. Il n'est pas possible de monter deux fois de niveau pour un même
 # combat.
-def lvl_jobs(combat_rapide = True, nombre_garde = 6, action = Action.bloquer):
+def lvl_jobs(nombre_tours = 6, action = ActionBatailleDefense()):
     # Désactiver l'attaque automatique, si elle était déjà activée
     # @todo: La détection s'effectue probablement avant que le combat soit vraiment démarré
     if valider_attaque_automatique(activer = False):
         logger.info("Désactivation de l'attaque automatique")
         pressFix("a")
 
-    # Override du combat rapide pour les cas où l'action à effectuer ne peut pas être
-    # automatisée de manière rapide
-    if action in [Action.etude]:
-        combat_rapide = False
-
     # Pour le combat rapide, on commence par bloquer et ensuite, on active
     # le mode automatique pendant une certaine période de temps
-    if combat_rapide:
+    if action.combat_rapide:
         logger.info("Action initiale")
-        executer_actions(action)
-        logger.info(f"Démarrage de l'attaque automatique pour {nombre_garde} tours")
+        action.executer_actions()
+        logger.info(f"Démarrage de l'attaque automatique pour {nombre_tours} tours")
         # Activer l'attaque automatique
         valider_attaque_automatique(activer = True)
         # Ça prend environs 5 secondes par tour
-        time.sleep(5 * nombre_garde)
+        time.sleep(5 * nombre_tours)
         logger.info("Désactivation de l'attaque automatique")
         pressFix("a")
     # Pour le mode lent, on bloque un certain nombre de tours, sans activer le combat automatique.
     # Ce mode est 3-4 fois plus lent que le combat rapide pour le même nombre d'actions.
     else:
         # Bloquer 6 fois pour monter de niveau
-        for i in range(nombre_garde):
+        for i in range(nombre_tours):
             logger.info(f"Tour de combat #{i}")
-            executer_actions(action)
+            action.executer_actions()
+            action.executer_actions_post()
 
-    attendre_prochain_tour()
+    action.attendre_prochain_tour()
     for i in range(4):
         logger.info(f"Attaque avec le personnage {i}")
-        attaquer()
+        action.attaquer()
         time.sleep(0.4)
     
     attendre_fin_combat()
 
-def main_loop(script = lvl_up, direction = Direction.gauche_droite, delai_deplacement = 0.5, action = Action.bloquer):
+def main_loop(script = lvl_up, direction = Direction.gauche_droite, delai_deplacement = 0.5, action = ActionBatailleDefense()):
     if direction == Direction.gauche_droite:
         direction1 = "left"
         direction2 = "right"
@@ -424,10 +447,10 @@ if __name__ == "__main__":
             match args.job:
                 case Job.Voleur:
                     logger.info("Exécution du script de lvl up de la job Voleur")
-                    main_loop(script = lvl_jobs, delai_deplacement = 0, action = Action.voler)
+                    main_loop(script = lvl_jobs, delai_deplacement = 0, action = ActionBatailleVoler())
                 case Job.Erudit:
                     logger.info("Exécution du script de lvl up de la job Érudit")
-                    main_loop(script = lvl_jobs, delai_deplacement = 0, action = Action.etude)
+                    main_loop(script = lvl_jobs, delai_deplacement = 0, action = ActionBatailleEtudier())
                 case _:
                     logger.info("Exécution du script de lvl up des jobs")
                     main_loop(script = lvl_jobs, delai_deplacement = 0)
