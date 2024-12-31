@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 from pyautogui import ImageNotFoundException
-from enum import Enum
+from enum import Enum, StrEnum
 import subprocess
 import pyautogui
 import psutil
@@ -11,6 +11,7 @@ import sys
 import os
 import dbus
 import logging
+import argparse
 
 SUPPORTED_SESSIONS = ["KDE"]
 STEAM_EXE = shutil.which("steam")
@@ -18,6 +19,20 @@ FF3_3DR_APP_ID = "239120"
 
 ratio = None
 logger = logging.getLogger(__name__)
+
+class Direction(Enum):
+    gauche_droite = 0
+    haut_bas = 1
+
+class Job(StrEnum):
+    Voleur = "voleur"
+    Erudit = "erudit"
+    Autre = "autre"
+
+class Action(Enum):
+    bloquer = 0
+    voler = 1
+    etude = 2
 
 ###
 # Utilitaires
@@ -38,10 +53,6 @@ class ScreenSaver(object):
         if self.__cookie_ is not None:
             self.__saver_interface_.UnInhibit(self.__cookie_)
             self.__cookie_ = None
-
-class Direction(Enum):
-    gauche_droite = 0
-    haut_bas = 1
 
 def get_scaling_ratio():
     session = None
@@ -195,19 +206,18 @@ def valider_attaque_automatique(activer = True):
 
     return True
 
-class Action(Enum):
-    bloquer = 0
-    voler = 1
-
 def executer_actions(action, interval = 0.2):
     for j in range(4):
         logger.info(f"Attente du début de l'action du personnage {j}")
         attendre_prochain_tour()
         logger.info(f"Le tour du personnage {j} est démarré")
         match action:
-            case "voler":
+            case Action.voler:
                 logger.info(f"Voler avec le personnage {j}")
                 voler(interval)
+            case Action.etude:
+                logger.info(f"Étude avec le personnage {j}")
+                etude(interval)
             case _:
                 logger.info(f"Bloquer avec le personnage {j}")
                 bloquer(interval)
@@ -216,10 +226,25 @@ def bloquer(interval = 0.2):
     pressFix(["down", "down", "enter"], interval = interval)
 
 def voler(interval = 0.2):
+    # Sélectionner l'action
     pressFix(["down", "enter"], interval = interval)
+    # Sélectionner la cible
+    pressFix(["enter"])
+
+def etude(interval = 0.2):
+    # Sélectionner l'action
+    pressFix(["down", "down", "enter"], interval = interval)
+    # Sélectionner la cible
+    pressFix(["enter"], interval = interval)
+    # Passer les informations
+    # @todo: ne fonctionne pas, ça devrait être dans une post action, parce que toutes les commandes sont enregistrées et ensuite exécutées en batch plus tard
+    pressFix(["enter", "enter", "enter"], interval = interval)
 
 def attaquer(interval = 0.2):
-    pressFix(["enter", "enter"], interval = interval)
+    # Sélectionner l'action
+    pressFix(["enter"], interval = interval)
+    # Sélectionner la cible
+    pressFix(["enter"], interval = interval)
 
 def attendre_prochain_tour(attendre = True):
     while attendre_image("screenshots/ff3/debut-tour.png", boucler = False, confidence = 0.9) is None:
@@ -257,6 +282,11 @@ def lvl_jobs(combat_rapide = True, nombre_garde = 6, action = Action.bloquer):
         logger.info("Désactivation de l'attaque automatique")
         pressFix("a")
 
+    # Override du combat rapide pour les cas où l'action à effectuer ne peut pas être
+    # automatisée de manière rapide
+    if action in [Action.etude]:
+        combat_rapide = False
+
     # Pour le combat rapide, on commence par bloquer et ensuite, on active
     # le mode automatique pendant une certaine période de temps
     if combat_rapide:
@@ -285,7 +315,7 @@ def lvl_jobs(combat_rapide = True, nombre_garde = 6, action = Action.bloquer):
     
     attendre_fin_combat()
 
-def main_loop(script = lvl_up, direction = Direction.gauche_droite, delai_deplacement = 0.5):
+def main_loop(script = lvl_up, direction = Direction.gauche_droite, delai_deplacement = 0.5, action = Action.bloquer):
     if direction == Direction.gauche_droite:
         direction1 = "left"
         direction2 = "right"
@@ -307,7 +337,7 @@ def main_loop(script = lvl_up, direction = Direction.gauche_droite, delai_deplac
                     time.sleep(delai_deplacement)
             
             logger.info("---------------------- Combat démarré ----------------------")
-            script()
+            script(action = action)
             logger.info("---------------------- Combat terminé ----------------------")
             detection_in_game(keys = ["enter", "enter", "enter"], temps_attente = 0.2)
         except pyautogui.FailSafeException:
@@ -336,11 +366,40 @@ def detection_initiale():
 
     logger.info("Configuration initiale terminé!!!")
 
+def parse_command():
+    parser = argparse.ArgumentParser(
+        prog = "ff3-3dr-farm",
+        description = "Automatismes pour les éléments extrêmement répétitifs de Final Fantasy 3 3D Remake.",
+        epilog = "Pour monter de niveau des jobs spécifiques (ex: voleur), l'automatisme prend pour acquis que tous les personnages ont la même job active."
+    )
+    group_script = parser.add_argument_group("Script", "Script automatisé à exécuter")
+    exclusif = group_script.add_mutually_exclusive_group()
+    exclusif.add_argument('-x', '--xp', action = 'store_true', default = False,
+        help = "Exécute le script de gain d'expérience (lvl up)")
+    exclusif.add_argument('-j', '--jobs', action = 'store_true', default = False,
+        help = "Exécute le script de gain de niveau de jobs")
+    group_jobs = parser.add_argument_group("Jobs", "Options spécifiques au script automatisé de jobs")
+    arg = group_jobs.add_argument('--job', choices = [Job.Voleur, Job.Erudit],
+        help = "Exécute un script spécifique pour les jobs qui n'ont pas d'action de type 'Défense'")
+    args = parser.parse_args()
+
+    # Si une job est spécifiée, on active le script de jobs
+    if not args.jobs and args.job:
+        args.xp = False
+        args.jobs = True
+    # Si aucune option est activée, on active le script de lvl up
+    elif not args.xp and not args.jobs:
+        args.xp = True
+
+    return args
+
 if __name__ == "__main__":
     from datetime import datetime
     start = datetime.now()
 
     logging.basicConfig(format = "%(asctime)s - %(message)s", level = logging.INFO)
+
+    args = parse_command()
 
     # Détection du ratio (scaling) de l'écran
     ratio = get_scaling_ratio()
@@ -358,13 +417,20 @@ if __name__ == "__main__":
         # Logique automatisée
         logger.info("====================== MAIN LOOP ======================")
         # Script général pour monter de niveau
-        #main_loop(script = lvl_up)
-
-        # Script optimisé pour monter le niveau des jobs
-        main_loop(script = lvl_jobs, delai_deplacement = 0)
-
-        # Script optimisé pour monter le niveau des jobs (version voleur, qui ne peut pas bloquer)
-        #main_loop(script = lvl_job, delai_deplacement = 0, action = Action.voler)
+        if args.xp:
+            logger.info("Exécution du script de lvl up")
+            main_loop(script = lvl_up)
+        elif args.jobs:
+            match args.job:
+                case Job.Voleur:
+                    logger.info("Exécution du script de lvl up de la job Voleur")
+                    main_loop(script = lvl_jobs, delai_deplacement = 0, action = Action.voler)
+                case Job.Erudit:
+                    logger.info("Exécution du script de lvl up de la job Érudit")
+                    main_loop(script = lvl_jobs, delai_deplacement = 0, action = Action.etude)
+                case _:
+                    logger.info("Exécution du script de lvl up des jobs")
+                    main_loop(script = lvl_jobs, delai_deplacement = 0)
     except KeyboardInterrupt:
         pass
     finally:
