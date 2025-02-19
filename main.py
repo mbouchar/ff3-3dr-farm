@@ -13,6 +13,8 @@ import dbus
 import logging
 import argparse
 
+from datetime import datetime, timedelta
+
 SUPPORTED_SESSIONS = ["KDE"]
 STEAM_EXE = shutil.which("steam")
 FF3_3DR_APP_ID = "239120"
@@ -176,8 +178,8 @@ def detection_menu_principal(attendre = True):
     return res is not None
 
 def demarrer_partie():
-    logger.info("Démarrage de la partie (enter + enter)")
-    pressFix(["enter", "enter"])
+    logger.info("Démarrage de la partie")
+    pressFix(["enter", "down", "down", "enter", "enter", "enter"])
 
 def detection_in_game(attendre = True, keys = None, temps_attente = 0.5):
     res = attendre_image("screenshots/ff3/in-game.png", boucler = attendre, keys = keys, temps_attente = temps_attente)
@@ -199,6 +201,14 @@ class ActionBatailleBase(object):
     def combat_rapide(self):
         return True
 
+    @property
+    def temps_combat_rapide(self):
+        return 5
+
+    @property
+    def executer_actions_post(self):
+        return False
+
     def executer_action_pre(self):
         pass
 
@@ -209,14 +219,13 @@ class ActionBatailleBase(object):
             logger.info(f"Le tour du personnage {j} est démarré")
             self.executer_action_pre()
 
-    def executer_action_post(self):
+    def action_post(self):
         pass
 
-    def executer_actions_post(self):
-        if not self.combat_rapide:
-            for j in range(4):
-                logger.info(f"Action POST pour le personnage {j}")
-                self.executer_action_post()
+    def actions_post(self):
+        for j in range(4):
+            logger.info(f"Action POST pour le personnage {j}")
+            self.action_post()
 
     def attendre_prochain_tour(self, attendre = True):
         while attendre_image("screenshots/ff3/debut-tour.png", boucler = False, confidence = 0.9) is None:
@@ -231,6 +240,26 @@ class ActionBatailleBase(object):
         pressFix(["enter"], interval = self.intervalle)
         # Sélectionner la cible
         pressFix(["enter"], interval = self.intervalle)
+
+    def terminer_combat(self):
+        self.attendre_prochain_tour()
+        for i in range(4):
+            logger.info(f"Attaque avec le personnage {i}")
+            self.attaquer()
+            time.sleep(0.4)
+        
+        self.attendre_fin_combat()
+
+    def attendre_fin_combat(self, attendre = True):
+        while attendre_image("screenshots/ff3/en-combat.png", boucler = False) is None:
+            if attendre:
+                time.sleep(0.2)
+            else:
+                return False
+        return True
+
+class ActionBatailleAttaquer(ActionBatailleBase):
+    pass
 
 class ActionBatailleDefense(ActionBatailleBase):
     def executer_action_pre(self):
@@ -247,10 +276,12 @@ class ActionBatailleVoler(ActionBatailleBase):
 
 class ActionBatailleEtudier(ActionBatailleBase):
     @property
-    def combat_rapide(self):
-        """Override du combat rapide pour les cas où l'action à effectuer ne peut pas être
-        automatisée de manière rapide."""
-        return False
+    def executer_actions_post(self):
+        return True
+
+    @property
+    def temps_combat_rapide(self):
+        return 10
 
     def executer_action_pre(self):
         logger.info(f"Action = étude")
@@ -259,13 +290,20 @@ class ActionBatailleEtudier(ActionBatailleBase):
         # Sélectionner la cible
         pressFix(["enter"], interval = self.intervalle)
 
-    def executer_action_post(self):
-        # Attendre que l'action Étude soit lancée
-        attendre_image("screenshots/ff3/combat/erudit-action-post.png", confidence = 0.9)
+    def action_post(self):
         # Passer les informations
-        pressFix(["enter", "enter", "enter"], interval = self.intervalle)
-        # Attendre que le texte soit disparu avant la prochaine action
-        time.sleep(self.intervalle)
+        pressFix(["enter"] * 6, interval = self.intervalle)
+
+    def terminer_combat(self):
+        while self.attendre_prochain_tour(attendre = False):
+            pressFix(["enter"])
+
+        for i in range(4):
+            logger.info(f"Attaque avec le personnage {i}")
+            self.attaquer()
+            time.sleep(0.4)
+        
+        self.attendre_fin_combat()
 
 def valider_attaque_automatique(activer = True):
     res = attendre_image("screenshots/ff3/combat-auto.png", boucler = False, grayscale = True, confidence = 0.9)
@@ -281,17 +319,9 @@ def valider_attaque_automatique(activer = True):
 
     return True
 
-def attendre_fin_combat(attendre = True):
-    while attendre_image("screenshots/ff3/en-combat.png", boucler = False) is None:
-        if attendre:
-            time.sleep(0.2)
-        else:
-            return False
-    return True
-
-def lvl_up():
+def lvl_up(action = None):
     valider_attaque_automatique()
-    attendre_fin_combat()
+    action.attendre_fin_combat()
 
 # Pour monter de niveau une job, il faut effectuer des "actions". Le script
 # prend pour acquis que le grinding s'effectue dans un endroit où les ennemis
@@ -317,28 +347,34 @@ def lvl_jobs(nombre_tours = 6, action = ActionBatailleDefense()):
         logger.info(f"Démarrage de l'attaque automatique pour {nombre_tours} tours")
         # Activer l'attaque automatique
         valider_attaque_automatique(activer = True)
-        # Ça prend environs 5 secondes par tour
-        time.sleep(5 * nombre_tours)
+        if action.executer_actions_post:
+            temps_total = action.temps_combat_rapide * nombre_tours
+            temps_debut = datetime.now()
+            temps_ecoule = timedelta(0)
+            while temps_ecoule.seconds < temps_total:
+                action.actions_post()
+                temps_ecoule = datetime.now() - temps_debut
+                print(f"Temps écoulé: {temps_ecoule.seconds} secondes")
+        else:
+            # Ça prend environs 5 secondes par tour
+            time.sleep(action.temps_combat_rapide * nombre_tours)
         logger.info("Désactivation de l'attaque automatique")
-        pressFix("a")
-    # Pour le mode lent, on bloque un certain nombre de tours, sans activer le combat automatique.
+        while valider_attaque_automatique(activer = False):
+            pressFix("a")
+            time.sleep(1)
+    # Pour le mode lent, on répète l'action un certain nombre de tours, sans activer le combat automatique.
     # Ce mode est 3-4 fois plus lent que le combat rapide pour le même nombre d'actions.
     else:
-        # Bloquer 6 fois pour monter de niveau
+        # Répéter l'action 6 fois pour monter de niveau
         for i in range(nombre_tours):
             logger.info(f"Tour de combat #{i}")
             action.executer_actions()
-            action.executer_actions_post()
+            action.actions_post()
 
-    action.attendre_prochain_tour()
-    for i in range(4):
-        logger.info(f"Attaque avec le personnage {i}")
-        action.attaquer()
-        time.sleep(0.4)
-    
-    attendre_fin_combat()
+    action.terminer_combat()
+    action.attendre_fin_combat()
 
-def main_loop(script = lvl_up, direction = Direction.gauche_droite, delai_deplacement = 0.5, action = ActionBatailleDefense()):
+def main_loop(script = lvl_up, direction = Direction.gauche_droite, delai_deplacement = 0.5, action = ActionBatailleAttaquer()):
     if direction == Direction.gauche_droite:
         direction1 = "left"
         direction2 = "right"
@@ -453,7 +489,7 @@ if __name__ == "__main__":
                     main_loop(script = lvl_jobs, delai_deplacement = 0, action = ActionBatailleEtudier())
                 case _:
                     logger.info("Exécution du script de lvl up des jobs")
-                    main_loop(script = lvl_jobs, delai_deplacement = 0)
+                    main_loop(script = lvl_jobs, delai_deplacement = 0, action = ActionBatailleDefense())
     except KeyboardInterrupt:
         pass
     finally:
